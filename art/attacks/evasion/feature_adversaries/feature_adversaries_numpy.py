@@ -17,11 +17,10 @@
 # SOFTWARE.
 """
 This module implements the Feature Adversaries attack.
-
 | Paper link: https://arxiv.org/abs/1511.05122
 """
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import numpy as np
 
@@ -37,7 +36,6 @@ logger = logging.getLogger(__name__)
 class FeatureAdversariesNumpy(EvasionAttack):
     """
     This class represent a Feature Adversaries evasion attack.
-
     | Paper link: https://arxiv.org/abs/1511.05122
     """
 
@@ -53,35 +51,32 @@ class FeatureAdversariesNumpy(EvasionAttack):
         self,
         classifier: "CLASSIFIER_NEURALNETWORK_TYPE",
         delta: Optional[float] = None,
-        layer: Optional[int] = None,
+        layer: Union[int, str, Tuple[int, ...], Tuple[str, ...]] = -1,
         batch_size: int = 32,
     ):
         """
         Create a :class:`.FeatureAdversaries` instance.
-
         :param classifier: A trained classifier.
         :param delta: The maximum deviation between source and guide images.
-        :param layer: Index of the representation layer.
+        :param layer: Index or tuple of indices of the representation layer(s).
         :param batch_size: Batch size.
         """
         super().__init__(estimator=classifier)
 
         self.delta = delta
-        self.layer = layer
+        self.layer = layer if isinstance(layer, tuple) else (layer,)
         self.batch_size = batch_size
         self._check_params()
 
     def generate(self, x: np.ndarray, y: Optional[np.ndarray] = None, **kwargs) -> np.ndarray:
         """
         Generate adversarial samples and return them in an array.
-
         :param x: Source samples.
         :param y: Guide samples.
         :param kwargs: The kwargs are used as `options` for the minimisation with `scipy.optimize.minimize` using
                        `method="L-BFGS-B"`. Valid options are based on the output of
                        `scipy.optimize.show_options(solver='minimize', method='L-BFGS-B')`:
                        Minimize a scalar function of one or more variables using the L-BFGS-B algorithm.
-
                        disp : None or int
                            If `disp is None` (the default), then the supplied version of `iprint`
                            is used. If `disp is not None`, then it overrides the supplied version
@@ -116,7 +111,6 @@ class FeatureAdversariesNumpy(EvasionAttack):
                            current parameter vector.
                        maxls : int, optional
                            Maximum number of line search steps (per iteration). Default is 20.
-
                        The option `ftol` is exposed via the `scipy.optimize.minimize` interface,
                        but calling `scipy.optimize.fmin_l_bfgs_b` directly exposes `factr`. The
                        relationship between the two is ``ftol = factr * numpy.finfo(float).eps``.
@@ -144,27 +138,30 @@ class FeatureAdversariesNumpy(EvasionAttack):
 
         bound = Bounds(lb=l_b, ub=u_b, keep_feasible=False)
 
-        guide_representation = self.estimator.get_activations(
-            x=y.reshape(-1, *self.estimator.input_shape),  # type: ignore
-            layer=self.layer,
-            batch_size=self.batch_size,
-        )
+        
 
         def func(x_i):
             x_i = x_i.astype(x.dtype)
-            source_representation = self.estimator.get_activations(
-                x=x_i.reshape(-1, *self.estimator.input_shape),
-                layer=self.layer,
-                batch_size=self.batch_size,
-            )
-
-            n = (
-                norm(
-                    source_representation.flatten() - guide_representation.flatten(),
-                    ord=2,
+            n=0
+            for layer_i in self.layer:
+                guide_representation = self.estimator.get_activations(
+                    x=y.reshape(-1, *self.estimator.input_shape),  # type: ignore
+                    layer=layer_i,
+                    batch_size=self.batch_size,
                 )
-                ** 2
-            )
+                source_representation = self.estimator.get_activations(
+                    x=x_i.reshape(-1, *self.estimator.input_shape),
+                    layer=layer_i,
+                    batch_size=self.batch_size,
+                )
+
+                n += (
+                    norm(
+                        source_representation.flatten() - guide_representation.flatten(),
+                        ord=2,
+                    )
+                    ** 2
+                )
 
             return n
 
@@ -207,8 +204,8 @@ class FeatureAdversariesNumpy(EvasionAttack):
         if self.delta is not None and self.delta <= 0:
             raise ValueError("The maximum deviation `delta` has to be positive.")
 
-        if not isinstance(self.layer, int):
-            raise ValueError("The index of the representation layer `layer` has to be integer.")
+        if not isinstance(self.layer, int) and not isinstance(self.layer, str) and not isinstance(self.layer, tuple):
+            raise ValueError("The value of the representation layer must be integer or string.")
 
         if self.batch_size <= 0:
             raise ValueError("The batch size `batch_size` has to be positive.")
